@@ -1,4 +1,4 @@
-import { NS, Server } from '@ns';
+import { NS, Server, Player } from '@ns';
 
 // This script attempts to walk the server tree and gain admin access
 // to servers that can be 'hacked'
@@ -10,87 +10,84 @@ export async function main(ns: NS): Promise<void> {
 }
 
 class Nuker {
-	private available_hacks: Set<string> = new Set();
 	private ns: NS;
 	private hacked: string[] = [];
-
+	private available: string[] = [];
 	constructor(ns: NS) {
-		if (ns.fileExists('BruteSSH.exe', 'home')) this.available_hacks.add('ssh');
-		if (ns.fileExists('relaySMTP.exe', 'home')) this.available_hacks.add('smtp');
-		if (ns.fileExists('FTPCrack.exe', 'home')) this.available_hacks.add('ftp');
-		if (ns.fileExists('HTTPWorm.exe', 'home')) this.available_hacks.add('http');
-		if (ns.fileExists('SQLInject.exe', 'home')) this.available_hacks.add('sql');
 		this.ns = ns;
+		if (this.ns.fileExists('BruteSSH.exe', 'home')) this.available.push('ssh');
+		if (this.ns.fileExists('relaySMTP.exe', 'home')) this.available.push('smtp');
+		if (this.ns.fileExists('FTPCrack.exe', 'home')) this.available.push('ftp');
+		if (this.ns.fileExists('HTTPWorm.exe', 'home')) this.available.push('http');
+		if (this.ns.fileExists('SQLInject.exe', 'home')) this.available.push('sql');
 	}
 
-	async run() {
-		const current_node = this.ns.getHostname();
-		await this.node_next(current_node, '');
-	}
-
-	print_nuked() {
-		if (this.hacked.length < 1) this.ns.tprintf('No server rooted');
-		for (const server of this.hacked) {
-			this.ns.tprintf('Server: ' + server + ' rooted');
+	public async run() {
+		// Always start at home. Skip home.
+		const connected = this.ns.scan('home');
+		for (const host of connected) {
+			await this.next_node(host, 'home');
 		}
 	}
 
-	private async node_next(node: string, previous_node: string) {
-		if (this.root_node(node)) this.hacked.push(node);
-		const connected_nodes = this.ns.scan(node);
-		for (const next_node of connected_nodes) {
-			if (next_node === previous_node) continue;
-			await this.node_next(next_node, node);
+	public print_nuked() {
+		for (const hacked of this.hacked) {
+			this.ns.tprintf("Server: " + hacked + " rooted");
 		}
 	}
 
-	private root_node(node: string): boolean {
+	private async next_node(node: string, previous_node: string) {
+		const connected = this.ns.scan(node);
+		if(this.root_node(node)) this.hacked.push(node);
+		for (const host of connected) {
+			if (host === previous_node) continue;
+			await this.next_node(host, node);
+		}
+	}
+	
+	// Attempt to root the node. Try not to rely on try catch
+	// It's slow and not necessary
+	private root_node(host: string): boolean {
 		const player = this.ns.getPlayer();
-		const server = this.ns.getServer(node);
+		const server = this.ns.getServer(host);
+		// Return if server is already nuked
 		if (server.hasAdminRights) return false;
+		// Return early if the server can't be hacked currently.
 		if (player.skills.hacking < server.requiredHackingSkill) return false;
-		if (server.numOpenPortsRequired > this.available_hacks.size) return false;
-		// We should be able to hack the server. Get list of unopened ports
-		// and start opening stuff
-		const ports = this.get_unopened_ports(server);
-		for (const item in ports.values()) {
-			this.open_port(item, node);
+		// Return early if the number of ports needed to hack is more than
+		// the players available port hack programs
+		if (!this.can_open_required_ports(server, player)) return false;
+		// We should be good to go.
+		for (const port_attack of this.available) {
+			this.open_port(host, port_attack);
 		}
-		// We should be ready to nuke now.
-		this.ns.nuke(node);
-		return true;	
+		this.ns.nuke(host);
+		return true;
 	}
 
-	private get_unopened_ports(host: Server): Set<string> {
-		const ports: Set<string> = new Set();
-		if (!host.sshPortOpen && this.available_hacks.has('ssh')) ports.add('ssh');
-		if (!host.ftpPortOpen && this.available_hacks.has('ftp')) ports.add('ftp');
-		if (!host.smtpPortOpen && this.available_hacks.has('smtp')) ports.add('smtp');
-		if (!host.httpPortOpen && this.available_hacks.has('http')) ports.add('http');
-		if (!host.sqlPortOpen && this.available_hacks.has('sql')) ports.add('sql');
-		return ports;
+	private can_open_required_ports(server: Server, player: Player): boolean {
+		// Make sure we have enough port hacks to be able to nuke the server
+		if (this.available.length < server.numOpenPortsRequired) return false;
+		return true;
 	}
 
-	private open_port(port_type: string, node: string) {
-		switch(port_type) {
+	private open_port(host: string, port: string) {
+		switch (port) {
 			case 'ssh':
-				this.ns.brutessh(node);
-				break;
-			case 'ftp':
-				this.ns.ftpcrack(node);
+				this.ns.brutessh(host);
 				break;
 			case 'smtp':
-				this.ns.relaysmtp(node);
+				this.ns.relaysmtp(host);
+				break;
+			case 'ftp':
+				this.ns.ftpcrack(host);
 				break;
 			case 'http':
-				this.ns.httpworm(node);
+				this.ns.httpworm(host);
 				break;
 			case 'sql':
-				this.ns.sqlinject(node);
-				break;
-			default:
+				this.ns.sqlinject(host);
 				break;
 		}
 	}
-
 }
